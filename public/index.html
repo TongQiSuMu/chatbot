@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>同启苏沐医疗AI助手</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- Markdown解析和代码高亮 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css">
+</head>
+<body>
+    <!-- 移动端遮罩 -->
+    <div class="sidebar-overlay"></div>
+    
+    <div class="container">
+        <!-- 左侧对话列表 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        <circle cx="12" cy="12" r="1"/>
+                    </svg>
+                    <span class="logo-text">同启苏沐医疗AI助手</span>
+                </div>
+            </div>
+            <button id="newChatBtn" class="new-chat-btn">
+                新建咨询
+            </button>
+            <div id="conversationList" class="conversation-list"></div>
+        </div>
+        
+        <!-- 右侧聊天区域 -->
+        <div class="chat-area">
+            <!-- 移动端头部 -->
+            <div class="mobile-header">
+                <button id="mobileMenuBtn" class="mobile-menu-btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <line x1="3" y1="12" x2="21" y2="12"></line>
+                        <line x1="3" y1="18" x2="21" y2="18"></line>
+                    </svg>
+                </button>
+                <span class="mobile-title">同启苏沐医疗AI助手</span>
+            </div>
+            
+            <div id="messageList" class="message-list">
+                <div class="welcome-message">
+                    选择或创建一个对话开始聊天
+                </div>
+            </div>
+            <div class="preset-messages">
+                <button class="preset-btn" data-message="你可以做什么？">你可以做什么？</button>
+                <button class="preset-btn" data-message="我好像感冒了..">我好像感冒了..</button>
+                <button class="preset-btn" data-message="怎样吃的健康？">怎样吃的健康？</button>
+            </div>
+            <div class="input-area">
+                <textarea id="messageInput" placeholder="输入消息..." disabled></textarea>
+                <button id="sendBtn" disabled>发送</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentConversationId = null;
+        const API_BASE = '/api';
+        
+        // 滚动控制变量
+        let isUserScrolling = false;
+        let autoScrollTimeout = null;
+        
+        // DOM元素
+        const conversationList = document.getElementById('conversationList');
+        const messageList = document.getElementById('messageList');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const newChatBtn = document.getElementById('newChatBtn');
+        
+        // 智能滚动函数
+        function scrollToBottomIfNeeded() {
+            if (!isUserScrolling) {
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+        }
+        
+        // 检查用户是否正在底部
+        function isAtBottom() {
+            const threshold = 50; // 50px的容差
+            return messageList.scrollTop + messageList.clientHeight >= messageList.scrollHeight - threshold;
+        }
+        
+        // 监听滚动事件
+        messageList.addEventListener('scroll', () => {
+            // 清除之前的超时
+            if (autoScrollTimeout) {
+                clearTimeout(autoScrollTimeout);
+            }
+            
+            // 如果用户滚动到底部，取消用户滚动状态
+            if (isAtBottom()) {
+                isUserScrolling = false;
+            } else {
+                // 用户向上滚动了
+                isUserScrolling = true;
+                
+                // 3秒后重新启用自动滚动（如果用户没有继续滚动）
+                autoScrollTimeout = setTimeout(() => {
+                    if (isAtBottom()) {
+                        isUserScrolling = false;
+                    }
+                }, 3000);
+            }
+        });
+        
+        // 加载对话列表
+        async function loadConversations() {
+            try {
+                const response = await fetch(`${API_BASE}/conversations`);
+                const conversations = await response.json();
+                
+                conversationList.innerHTML = '';
+                conversations.forEach(conv => {
+                    const div = document.createElement('div');
+                    div.className = 'conversation-item';
+                    if (conv.id === currentConversationId) {
+                        div.classList.add('active');
+                    }
+                    div.innerHTML = `
+                        <span>${conv.title}</span>
+                        <button class="delete-btn" data-id="${conv.id}">×</button>
+                    `;
+                    div.addEventListener('click', (e) => {
+                        if (!e.target.classList.contains('delete-btn')) {
+                            selectConversation(conv.id);
+                        }
+                    });
+                    conversationList.appendChild(div);
+                });
+                
+                // 删除按钮事件
+                document.querySelectorAll('.delete-btn').forEach(btn => {
+                    btn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        if (confirm('确定删除这个对话吗？')) {
+                            await deleteConversation(btn.dataset.id);
+                        }
+                    });
+                });
+            } catch (error) {
+                console.error('加载对话失败:', error);
+            }
+        }
+        
+        // 选择对话
+        async function selectConversation(id) {
+            // 清理之前的标题监控
+            if (titleUpdateMonitor) {
+                clearInterval(titleUpdateMonitor);
+                titleUpdateMonitor = null;
+                console.log('切换对话，清理标题监控器');
+            }
+            
+            currentConversationId = id;
+            messageInput.disabled = false;
+            sendBtn.disabled = false;
+            
+            // 更新UI
+            document.querySelectorAll('.conversation-item').forEach(item => {
+                item.classList.remove('active');
+                const deleteBtn = item.querySelector('.delete-btn');
+                if (deleteBtn && deleteBtn.dataset.id == id) {
+                    item.classList.add('active');
+                }
+            });
+            
+            // 加载消息
+            await loadMessages();
+        }
+        
+        // 更新预设消息显示状态
+        function updatePresetMessagesVisibility() {
+            const presetMessages = document.querySelector('.preset-messages');
+            if (!presetMessages) return;
+            
+            const messageCount = messageList.querySelectorAll('.message').length;
+            if (messageCount === 0 && currentConversationId) {
+                // 有对话但没有消息，显示预设消息
+                presetMessages.style.display = 'flex';
+            } else if (messageCount > 0) {
+                // 有消息，隐藏预设消息
+                presetMessages.style.display = 'none';
+            } else {
+                // 没有对话，隐藏预设消息
+                presetMessages.style.display = 'none';
+            }
+        }
+        
+        // 加载消息
+        async function loadMessages() {
+            if (!currentConversationId) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/conversations/${currentConversationId}/messages`);
+                const messages = await response.json();
+                
+                messageList.innerHTML = '';
+                messages.forEach(msg => {
+                    addMessageToUI(msg.role, msg.content);
+                });
+                
+                if (messages.length === 0) {
+                    messageList.innerHTML = '<div class="welcome-message">您好，我是医疗健康AI助手，有什么可以帮你的吗？</div>';
+                }
+                
+                // 更新预设消息显示状态
+                updatePresetMessagesVisibility();
+                
+                // 重置用户滚动状态（加载新对话时）
+                isUserScrolling = false;
+                scrollToBottomIfNeeded();
+            } catch (error) {
+                console.error('加载消息失败:', error);
+            }
+        }
+        
+        // 创建新对话
+        async function createNewConversation(isAuto = false) {
+            try {
+                // 清理之前的标题监控
+                if (titleUpdateMonitor) {
+                    clearInterval(titleUpdateMonitor);
+                    titleUpdateMonitor = null;
+                    console.log('创建新对话，清理标题监控器');
+                }
+                
+                const title = isAuto ? '新对话' : '新对话 ' + new Date().toLocaleString();
+                const response = await fetch(`${API_BASE}/conversations`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title })
+                });
+                const conv = await response.json();
+                currentConversationId = conv.id;
+                await loadConversations();
+                await selectConversation(conv.id);
+            } catch (error) {
+                console.error('创建对话失败:', error);
+            }
+        }
+        
+        // 删除对话
+        async function deleteConversation(id) {
+            try {
+                await fetch(`${API_BASE}/conversations/${id}`, { method: 'DELETE' });
+                if (id == currentConversationId) {
+                    currentConversationId = null;
+                    messageList.innerHTML = '<div class="welcome-message">选择或创建一个对话开始聊天</div>';
+                    messageInput.disabled = true;
+                    sendBtn.disabled = true;
+                    updatePresetMessagesVisibility();
+                }
+                await loadConversations();
+            } catch (error) {
+                console.error('删除对话失败:', error);
+            }
+        }
+        
+        // 发送消息
+        async function sendMessage() {
+            const content = messageInput.value.trim();
+            if (!content || !currentConversationId) return;
+            
+            // 重置滚动状态（用户主动发送消息时）
+            isUserScrolling = false;
+            
+            // 清空输入框并禁用
+            messageInput.value = '';
+            messageInput.disabled = true;
+            sendBtn.disabled = true;
+            
+            // 添加用户消息到UI
+            addMessageToUI('user', content);
+            
+            // 隐藏预设消息（因为开始对话了）
+            updatePresetMessagesVisibility();
+            
+            // 创建AI回复的容器
+            const assistantDiv = document.createElement('div');
+            assistantDiv.className = 'message assistant';
+            assistantDiv.innerHTML = ''; // 开始为空
+            messageList.appendChild(assistantDiv);
+            scrollToBottomIfNeeded();
+            
+            let fullContent = ''; // 存储完整的markdown内容
+            
+            try {
+                const response = await fetch(`${API_BASE}/conversations/${currentConversationId}/messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('发送失败');
+                }
+                
+                // 处理流式响应
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let isStreamDone = false;
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                
+                    // 保留最后一段（可能不完整）
+                    buffer = lines.pop() || '';
+                    
+                    for (const chunk of lines) {
+                        if (chunk.startsWith('data: ')) {
+                            const data = chunk.slice(6).trim();
+                            
+                            if (data === '[DONE]') {
+                                // 流式输出结束
+                                console.log('流式输出完成');
+                                isStreamDone = true;
+                                
+                                // 确保最终渲染正确
+                                if (fullContent) {
+                                    assistantDiv.innerHTML = renderMarkdown(fullContent);
+                                    if (typeof Prism !== 'undefined') {
+                                        Prism.highlightAllUnder(assistantDiv);
+                                    }
+                                }
+                
+                // 更新对话列表
+                await loadConversations();
+                                
+                                // 如果是第一轮对话，设置持续检查标题更新
+                                const messageCount = messageList.querySelectorAll('.message').length;
+                                if (messageCount === 2) { // 用户消息 + AI回复 = 第一轮对话
+                                    console.log('第一轮对话完成，开始监控标题更新...');
+                                    startTitleUpdateMonitoring();
+                                }
+                                break;
+                            }
+                            
+                            if (data && data !== '') {
+                                try {
+                                    const parsed = JSON.parse(data);
+                                    if (parsed.content) {
+                                        // 追加新内容到完整内容
+                                        fullContent += parsed.content;
+                                        
+                                        // 实时渲染Markdown
+                                        assistantDiv.innerHTML = renderMarkdown(fullContent);
+                                        
+                                        // 代码高亮
+                                        if (typeof Prism !== 'undefined') {
+                                            Prism.highlightAllUnder(assistantDiv);
+                                        }
+                                        
+                                        scrollToBottomIfNeeded();
+                                    } else if (parsed.error) {
+                                        throw new Error(parsed.error);
+                                    }
+                                } catch (parseError) {
+                                    console.warn('解析流式数据失败:', data, parseError);
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (isStreamDone) break;
+                }
+            } catch (error) {
+                assistantDiv.textContent = '发送失败: ' + error.message;
+                assistantDiv.classList.add('error');
+                console.error('发送消息失败:', error);
+            } finally {
+                messageInput.disabled = false;
+                sendBtn.disabled = false;
+                messageInput.focus();
+            }
+        }
+        
+        // Markdown渲染函数
+        function renderMarkdown(content) {
+            // 更彻底地清理多余的换行符和空白
+            let cleanedContent = content
+                .replace(/\r\n/g, '\n')      // 统一换行符
+                .replace(/\r/g, '\n')        // 统一换行符
+                .replace(/\n{3,}/g, '\n\n')  // 将3个或更多连续换行符替换为2个
+                .replace(/^\n+/, '')         // 移除开头的换行符
+                .replace(/\n+$/, '')         // 移除结尾的换行符
+                .replace(/\n\s*\n/g, '\n\n') // 清理只包含空白字符的行
+                .trim();                     // 移除首尾空白
+            
+            // 配置marked选项
+            marked.setOptions({
+                breaks: false,  // 不将单个换行符转换为<br>
+                gfm: true,
+                sanitize: false,
+                highlight: function(code, lang) {
+                    if (lang && Prism.languages[lang]) {
+                        return Prism.highlight(code, Prism.languages[lang], lang);
+                    }
+                    return code;
+                }
+            });
+            
+            // 渲染Markdown
+            let html = marked.parse(cleanedContent);
+            
+            // 后处理：清理渲染后的HTML中的多余空白
+            html = html
+                .replace(/<p>\s*<\/p>/g, '')           // 移除空的段落标签
+                .replace(/(<\/p>)\s*(<p>)/g, '$1$2')   // 移除段落之间的多余空白
+                .replace(/\n\s*\n/g, '\n')             // 移除HTML中的多余换行
+                .trim();
+            
+            return html;
+        }
+        
+        // 添加消息到UI
+        function addMessageToUI(role, content) {
+            // 如果是用户的第一条消息，清除欢迎消息
+            if (role === 'user') {
+                const welcomeMessage = messageList.querySelector('.welcome-message');
+                if (welcomeMessage) {
+                    welcomeMessage.remove();
+                }
+            }
+            
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            
+            if (role === 'assistant') {
+                // AI消息使用Markdown渲染
+                div.innerHTML = renderMarkdown(content);
+                // 代码高亮
+                if (typeof Prism !== 'undefined') {
+                    Prism.highlightAllUnder(div);
+                }
+            } else {
+                // 用户消息保持纯文本
+            div.textContent = content;
+            }
+            
+            messageList.appendChild(div);
+            scrollToBottomIfNeeded();
+        }
+        
+        // 标题更新监控器
+        let titleUpdateMonitor = null;
+        
+        // 开始标题更新监控
+        function startTitleUpdateMonitoring() {
+            if (titleUpdateMonitor) {
+                clearInterval(titleUpdateMonitor);
+            }
+            
+            let checkCount = 0;
+            let lastCheckTime = Date.now();
+            const startTime = Date.now();
+            
+            titleUpdateMonitor = setInterval(async () => {
+                checkCount++;
+                const currentTime = Date.now();
+                const elapsedTime = currentTime - startTime;
+                
+                console.log(`标题检查 #${checkCount} (已等待 ${Math.round(elapsedTime/1000)}s)`);
+                
+                const titleUpdated = await checkAndUpdateTitle();
+                
+                if (titleUpdated) {
+                    console.log('✅ 标题更新成功，停止监控');
+                    clearInterval(titleUpdateMonitor);
+                    titleUpdateMonitor = null;
+                    return;
+                }
+                
+                // 动态调整检查间隔：前30秒每1秒检查一次，之后每5秒检查一次
+                let nextInterval;
+                if (elapsedTime < 30000) { // 前30秒
+                    nextInterval = 1000; // 每1秒检查
+                } else if (elapsedTime < 120000) { // 30秒到2分钟
+                    nextInterval = 5000; // 每5秒检查
+                } else { // 2分钟后
+                    nextInterval = 10000; // 每10秒检查
+                }
+                
+                // 重新设置定时器间隔
+                if (currentTime - lastCheckTime !== nextInterval) {
+                    clearInterval(titleUpdateMonitor);
+                    titleUpdateMonitor = setTimeout(() => {
+                        startTitleUpdateMonitoring(); // 重新开始监控
+                    }, nextInterval);
+                    lastCheckTime = currentTime;
+                }
+                
+                // 最多监控10分钟，避免无限监控
+                if (elapsedTime > 600000) { // 10分钟
+                    console.log('⚠️ 标题监控超时，停止监控');
+                    clearInterval(titleUpdateMonitor);
+                    titleUpdateMonitor = null;
+                }
+            }, 1000); // 初始间隔1秒
+        }
+        
+        // 检查并更新对话标题
+        async function checkAndUpdateTitle() {
+            if (!currentConversationId) return false;
+            
+            try {
+                const response = await fetch(`${API_BASE}/conversations/${currentConversationId}`);
+                const conversation = await response.json();
+                
+                // 检查当前显示的标题是否需要更新
+                const activeItem = document.querySelector('.conversation-item.active span');
+                if (activeItem && activeItem.textContent !== conversation.title && conversation.title !== '新对话') {
+                    console.log('🎉 检测到标题更新:', activeItem.textContent, '->', conversation.title);
+                    
+                    // 保存当前选中的对话ID
+                    const savedConversationId = currentConversationId;
+                    
+                    // 重新加载对话列表
+                    await loadConversations();
+                    
+                    // 重新选中当前对话以保持状态
+                    const updatedActiveItem = document.querySelector(`.conversation-item .delete-btn[data-id="${savedConversationId}"]`)?.closest('.conversation-item');
+                    if (updatedActiveItem) {
+                        document.querySelectorAll('.conversation-item').forEach(item => item.classList.remove('active'));
+                        updatedActiveItem.classList.add('active');
+                    }
+                    
+                    return true; // 标题已更新
+                }
+                return false; // 标题未更新
+            } catch (error) {
+                console.error('检查标题更新失败:', error);
+                return false;
+            }
+        }
+        
+        // 移动端菜单控制
+        const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+        const sidebar = document.querySelector('.sidebar');
+        const sidebarOverlay = document.querySelector('.sidebar-overlay');
+        
+        function toggleMobileMenu() {
+            sidebar.classList.toggle('open');
+            document.body.classList.toggle('sidebar-open');
+        }
+        
+        function closeMobileMenu() {
+            sidebar.classList.remove('open');
+            document.body.classList.remove('sidebar-open');
+        }
+        
+        // 预设消息点击处理
+        function handlePresetMessage(message) {
+            if (!currentConversationId) {
+                // 如果没有当前对话，先创建一个
+                createNewConversation(true).then(() => {
+                    messageInput.value = message;
+                    sendMessage();
+                });
+            } else {
+                messageInput.value = message;
+                sendMessage();
+            }
+        }
+        
+        // 事件监听
+        newChatBtn.addEventListener('click', createNewConversation);
+        sendBtn.addEventListener('click', sendMessage);
+        mobileMenuBtn.addEventListener('click', toggleMobileMenu);
+        
+        // 预设消息按钮事件
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('preset-btn')) {
+                const message = e.target.dataset.message;
+                handlePresetMessage(message);
+            }
+        });
+        
+        // 点击对话项后关闭移动端菜单
+        const originalSelectConversation = selectConversation;
+        selectConversation = async function(id) {
+            await originalSelectConversation.call(this, id);
+            if (window.innerWidth <= 768) {
+                closeMobileMenu();
+            }
+        };
+        
+        // 点击遮罩关闭菜单
+        sidebarOverlay.addEventListener('click', closeMobileMenu);
+        
+        // 监听窗口大小变化
+        window.addEventListener('resize', () => {
+            if (window.innerWidth > 768) {
+                closeMobileMenu();
+            }
+        });
+        
+        // 页面卸载时清理监控器
+        window.addEventListener('beforeunload', () => {
+            if (titleUpdateMonitor) {
+                clearInterval(titleUpdateMonitor);
+                titleUpdateMonitor = null;
+            }
+        });
+        
+        messageInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        
+        // 初始化
+        async function initialize() {
+            await loadConversations();
+            
+            // 如果没有选中的对话，尝试自动选择第一个或创建新对话
+            if (!currentConversationId) {
+                const conversationItems = document.querySelectorAll('.conversation-item');
+                if (conversationItems.length > 0) {
+                    // 自动选择第一个对话
+                    const firstConvId = conversationItems[0].querySelector('.delete-btn').dataset.id;
+                    await selectConversation(firstConvId);
+                } else {
+                    // 如果没有对话，自动创建一个默认对话
+                    await createNewConversation(true);
+                }
+            }
+        }
+        
+        initialize();
+    </script>
+</body>
+</html>
